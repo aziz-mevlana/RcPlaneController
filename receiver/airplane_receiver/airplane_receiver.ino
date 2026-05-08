@@ -1,8 +1,13 @@
 /*
  * RC Ucak Alici - Arduino Nano + NRF24L01+
  * Kanallar: Aileron(D3), Elevator(D5), Rudder(D6), Throttle(D7)
- * Telemetri: 3S Pil voltaji(A0) + sinyal gucu
- * Pil: 3S LiPo 11.1V (9.9V-12.6V)
+ * Telemetri: 3S Pil voltaji(A0) + sinyal gucu (RSSI)
+ * Pil: 3S LiPo 11.1V (9.9V - 12.6V)
+ *
+ * LED Durumu:
+ *   Surekli YANIK  = Bagli, normal calisma
+ *   Yavas yanip sonme = Baglanti bekleniyor
+ *   Hizli yanip sonme = Failsafe aktif (sinyal kaybi)
  */
 
 #include <SPI.h>
@@ -18,14 +23,13 @@
 #define RUDDER_PIN    6
 #define THROTTLE_PIN  7
 #define BATTERY_PIN   A0
-#define LED_PIN       2   // Durum LED'i (opsiyonel)
+#define LED_PIN       2
 
 // === NRF24L01+ ===
 RF24 radio(CE_PIN, CSN_PIN);
 const byte address[6] = "RC01";
 
 // === Paket Tanimlari ===
-// Kontrol Paketi (9 byte) - Vericiden alinir
 struct ControlPacket {
   uint8_t header;        // 0xC0
   uint16_t aileron;      // 1000-2000 us
@@ -34,12 +38,11 @@ struct ControlPacket {
   uint16_t throttle;
 } __attribute__((packed));
 
-// Telemetri Paketi (6 byte) - Vericiye gonderilir
 struct TelemetryPacket {
   uint8_t header;        // 0xAA
   uint16_t battery_mv;   // milivolt
   uint8_t rssi;          // 0-100
-  uint8_t flags;         // bit0: failsafe
+  uint8_t flags;         // bit0: failsafe, bit1: pil kritik
   uint8_t crc;
 } __attribute__((packed));
 
@@ -56,15 +59,14 @@ const uint16_t SERVO_MAX = 2000;
 const uint16_t THROTTLE_MIN = 1000;
 const uint16_t THROTTLE_MAX = 2000;
 
-const unsigned long FAILSAFE_TIMEOUT = 500;
-const unsigned long TELEMETRY_INTERVAL = 100;
+const unsigned long FAILSAFE_TIMEOUT = 500;   // 500ms sinyal kaybi = failsafe
+const unsigned long TELEMETRY_INTERVAL = 100;  // 100ms = 10Hz telemetri
 
 // Voltaj bolucu: R1=10k, R2=2.2k
 // Vout = Vin * R2/(R1+R2) => Vin = Vout * (R1+R2)/R2
-// Oran = (10+2.2)/2.2 = 5.545
 const float VOLTAGE_DIVIDER_RATIO = 5.545;
 
-// 3S LiPo sinirlar
+// 3S LiPo sinirlari
 const uint16_t BATTERY_FULL_MV = 12600;
 const uint16_t BATTERY_EMPTY_MV = 9900;
 const uint16_t BATTERY_CRITICAL_MV = 10200;
@@ -74,9 +76,16 @@ unsigned long lastPacketTime = 0;
 unsigned long packetCount = 0;
 unsigned long lastTelemetryTime = 0;
 bool failsafeActive = false;
+bool firstPacketReceived = false;
 
-// RSSI icin
-unsigned long prevPacketCount = 0;
+// RSSI hesaplamasi icin
+unsigned long rssiWindowStart = 0;
+unsigned long rssiWindowPackets = 0;
+uint8_t currentRSSI = 0;
+
+// LED yanip sonme
+unsigned long lastLedToggle = 0;
+bool ledState = false;
 
 void setup() {
   Serial.begin(115200);
@@ -91,7 +100,7 @@ void setup() {
   rudderServo.attach(RUDDER_PIN);
   throttleEsc.attach(THROTTLE_PIN);
 
-  // Baslangic pozisyonlari
+  // Baslangic: guvenli pozisyon
   setFailsafePosition();
 
   // NRF24L01+ baslatma
@@ -107,26 +116,34 @@ void setup() {
   delay(2000);
   digitalWrite(LED_PIN, LOW);
 
+  rssiWindowStart = millis();
+
   Serial.println(F("ALICI HAZIR"));
-  Serial.print(F("Pil araligi: "));
-  Serial.print(BATTERY_EMPTY_MV);
-  Serial.print(F(" - "));
-  Serial.print(BATTERY_FULL_MV);
-  Serial.println(F(" mV"));
 }
 
 void loop() {
   unsigned long now = millis();
 
-  // --- Paket Alimi ---
+  // === Paket Alimi ===
   if (radio.available()) {
     ControlPacket pkt;
     radio.read(&pkt, sizeof(pkt));
 
     if (pkt.header == 0xC0) {
       lastPacketTime = now;
-      failsafeActive = false;
       packetCount++;
+      rssiWindowPackets++;
+
+      if (!firstPacketReceived) {
+        firstPacketReceived = true;
+        Serial.println(F("ILK PAKET ALINDI"));
+      }
+
+      // Failsafe sifirla
+      if (failsafeActive) {
+        failsafeActive = false;
+        Serial.println(F("FAILSAFE DEVRE DISI - Baglanti geri geldi"));
+      }
 
       // Degerleri guvenli araliga cek
       uint16_t ail = constrain(pkt.aileron, SERVO_MIN, SERVO_MAX);
@@ -142,21 +159,25 @@ void loop() {
     }
   }
 
-  // --- Failsafe Kontrolu ---
+  // === RSSI Hesapla (her 1 saniyede) ===
+  if (now - rssiWindowStart >= 1000) {
+    // 50Hz gonderimde 50 paket = %100 RSSI
+    currentRSSI = constrain(rssiWindowPackets * 2, 0, 100);
+    rssiWindowPackets = 0;
+    rssiWindowStart = now;
+  }
+
+  // === Failsafe Kontrolu ===
   if (!failsafeActive && (now - lastPacketTime > FAILSAFE_TIMEOUT)) {
     failsafeActive = true;
     setFailsafePosition();
     Serial.println(F("FAILSAFE AKTIF - Sinyal kaybi!"));
   }
 
-  // --- LED Guncelleme ---
-  if (failsafeActive) {
-    digitalWrite(LED_PIN, (now / 100) % 2);  // Hizli yanip sonme
-  } else {
-    digitalWrite(LED_PIN, HIGH);  // Sabit - bagli
-  }
+  // === LED Durumu ===
+  updateLED(now);
 
-  // --- Telemetri Gonderimi ---
+  // === Telemetri Gonderimi ===
   if (now - lastTelemetryTime >= TELEMETRY_INTERVAL) {
     lastTelemetryTime = now;
     sendTelemetry();
@@ -170,20 +191,39 @@ void setFailsafePosition() {
   throttleEsc.writeMicroseconds(THROTTLE_MIN);
 }
 
+void updateLED(unsigned long now) {
+  if (failsafeActive) {
+    // Hizli yanip sonme (100ms)
+    if (now - lastLedToggle >= 100) {
+      lastLedToggle = now;
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState);
+    }
+  } else if (!firstPacketReceived) {
+    // Yavas yanip sonme (500ms) - baglanti bekleniyor
+    if (now - lastLedToggle >= 500) {
+      lastLedToggle = now;
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState);
+    }
+  } else {
+    // Surekli yanik - normal calisma
+    digitalWrite(LED_PIN, HIGH);
+  }
+}
+
 void sendTelemetry() {
   TelemetryPacket tel;
   tel.header = 0xAA;
 
-  // Pil voltaji hesapla (3S LiPo)
+  // Pil voltaji (3S LiPo)
   int analogVal = analogRead(BATTERY_PIN);
   float vout = analogVal * (5.0 / 1024.0);
   uint16_t vin_mv = (uint16_t)(vout * VOLTAGE_DIVIDER_RATIO * 1000.0);
   tel.battery_mv = vin_mv;
 
-  // RSSI: son 1 saniyedeki paket orani
-  unsigned long countDiff = packetCount - prevPacketCount;
-  prevPacketCount = packetCount;
-  tel.rssi = (uint8_t)constrain(countDiff * 10, 0, 100);
+  // RSSI
+  tel.rssi = currentRSSI;
 
   // Durum bayraklari
   tel.flags = 0;
@@ -194,9 +234,9 @@ void sendTelemetry() {
   tel.crc = tel.header ^ (uint8_t)(tel.battery_mv & 0xFF)
             ^ (uint8_t)(tel.battery_mv >> 8) ^ tel.rssi ^ tel.flags;
 
-  // Gonder (TX moduna gec, geri don)
+  // TX moduna gec, gonder, RX moduna don
   radio.stopListening();
   radio.openWritingPipe(address);
-  bool ok = radio.write(&tel, sizeof(tel));
+  radio.write(&tel, sizeof(tel));
   radio.startListening();
 }
