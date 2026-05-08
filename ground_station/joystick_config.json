@@ -1,0 +1,16 @@
+{
+  "description": "Steam Deck joystick eksen eslestirmesi",
+  "axis_map": {
+    "0": {"channel": "aileron", "invert": false},
+    "1": {"channel": "elevator", "invert": true},
+    "3": {"channel": "rudder", "invert": false},
+    "4": {"channel": "throttle", "invert": true}
+  },
+  "notes": {
+    "axis_0": "Sol cubuk yatay - Aileron (kanat yuvarlama)",
+    "axis_1": "Sol cubuk dikey - Elevator (burun yukari/asagi)",
+    "axis_3": "Sag cubuk yatay - Rudder (yon degistirme)",
+    "axis_4": "Sag cubuk dikey - Throttle (gaz)",
+    "invert": "true = eksen ters cevrilir"
+  }
+}
