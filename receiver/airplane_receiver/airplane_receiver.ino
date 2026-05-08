@@ -59,8 +59,8 @@ const uint16_t SERVO_MAX = 2000;
 const uint16_t THROTTLE_MIN = 1000;
 const uint16_t THROTTLE_MAX = 2000;
 
-const unsigned long FAILSAFE_TIMEOUT = 500;   // 500ms sinyal kaybi = failsafe
-const unsigned long TELEMETRY_INTERVAL = 100;  // 100ms = 10Hz telemetri
+const unsigned long FAILSAFE_TIMEOUT = 800;   // 800ms sinyal kaybi = failsafe
+const unsigned long TELEMETRY_INTERVAL = 200;  // 200ms = 5Hz telemetri
 
 // Voltaj bolucu: R1=10k, R2=2.2k
 // Vout = Vin * R2/(R1+R2) => Vin = Vout * (R1+R2)/R2
@@ -236,7 +236,9 @@ void sendTelemetry() {
 
   // TX moduna gec, gonder, RX moduna don
   radio.stopListening();
+  delayMicroseconds(150); // TX moduna gecis bekleme
   radio.openWritingPipe(address);
   radio.write(&tel, sizeof(tel));
+  delayMicroseconds(100); // Gonderim tamamlanma bekleme
   radio.startListening();
 }

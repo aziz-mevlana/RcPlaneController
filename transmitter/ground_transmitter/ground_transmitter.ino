@@ -55,10 +55,10 @@ bool planeConnected = false;
 
 // Telemetri zamanlama
 unsigned long lastTelCheckTime = 0;
-const unsigned long TEL_CHECK_INTERVAL = 5; // Her 5ms'de telemetri kontrol et
+const unsigned long TEL_CHECK_INTERVAL = 200; // Her 200ms'de telemetri kontrol et (5Hz)
 
 // Baglanti timeout
-const unsigned long PLANE_TIMEOUT = 1500; // 1.5 saniye
+const unsigned long PLANE_TIMEOUT = 2000; // 2 saniye
 
 void setup() {
   Serial.begin(115200);
@@ -142,13 +142,13 @@ void readSerialCommands() {
 void checkTelemetry() {
   // TX modundan RX moduna gec
   radio.startListening();
-  delayMicroseconds(200);
+  delayMicroseconds(300);
 
-  // Kisa bekleme - telemetri var mi kontrol et
+  // Telemetri icin bekle (max 2ms)
   unsigned long waitStart = micros();
   bool gotData = false;
 
-  while (micros() - waitStart < 800) { // Max 800us bekle
+  while (micros() - waitStart < 2000) { // Max 2000us = 2ms bekle
     if (radio.available()) {
       gotData = true;
       break;
@@ -181,4 +181,5 @@ void checkTelemetry() {
 
   // RX modundan TX moduna don
   radio.stopListening();
+  delayMicroseconds(150); // TX moduna gecis icin kisa bekleme
 }
