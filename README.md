@@ -1,153 +1,160 @@
-# RC Uçak Kontrol Sistemi
+# RC Plane Controller
 
-Arduino Nano + NRF24L01+ tabanlı RC uçak kontrol sistemi. Web tabanlı arayüz ile kontrol.
-
-## Donanım
-
-### Uçak (Alıcı)
-- Arduino Nano
-- NRF24L01+ modül
-- 4x Servo (Aileron, Elevator, Rudder, Throttle/ESC)
-- 3S LiPo pil (11.1V)
-- Voltaj bölücü: R1=10kΩ, R2=2.2kΩ (A0 pinine)
-
-### Yer (Verici)
-- Arduino Nano
-- NRF24L01+ modül
-- USB kablo (Steam Deck'e veya bilgisayara)
+2x Arduino Nano + NRF24L01 ile 5 kanal kablosuz RC uçak kontrol sistemi.
 
 ## Proje Yapısı
 
 ```
-RcPlaneController/
-├── ground_station_web/          # Web tabanlı kontrol arayüzü
-│   ├── app.py                   # Flask + WebSocket backend
-│   ├── requirements.txt
-│   ├── templates/index.html
-│   └── static/
-│       ├── css/style.css        # Profesyonel tema
-│       └── js/app.js            # Three.js 3D model + input
-├── transmitter/
-│   └── ground_transmitter/      # Verici Arduino kodu
-├── receiver/
-│   └── airplane_receiver/       # Alıcı Arduino kodu
-└── ground_station/              # Eski PyGame arayüzü (kullanılmıyor)
+├── transmitter/transmitter.ino   # Verici - Binary protokol, NRF24L01 gönderir
+├── receiver/receiver.ino         # Alıcı - ESC + 4 servo (dual aileron mix)
+├── control.py                    # PC klavye kontrol scripti
+└── venv/                         # Python sanal ortam
 ```
 
-## Pin Bağlantıları
+## Kanal Listesi
 
-### Uçak Arduino Nano
-| Pin | Bağlantı |
-|-----|----------|
-| D2 | Durum LED'i |
-| D3 | Aileron Servo |
-| D5 | Elevator Servo |
-| D6 | Rudder Servo |
-| D7 | ESC Throttle |
-| D9 | NRF24L01+ CE |
-| D10 | NRF24L01+ CSN |
-| D11 | NRF24L01+ MOSI |
-| D12 | NRF24L01+ MISO |
-| D13 | NRF24L01+ SCK |
-| A0 | Pil Voltaj Bölücü |
-| 3.3V | NRF24L01+ VCC |
-| GND | Ortak GND |
+| Kanal | İşlev | Tip | Alıcı Pini | Kontrol Tuşu |
+|-------|-------|-----|-----------|-------------|
+| 1 | Throttle (Gaz) | ESC | D3 | W / S |
+| 2 | Aileron (Roll) | Servo x2 | D5 + D4 | ← → |
+| 3 | Elevator (Kuyruk Yatay) | Servo | D6 | ↑ ↓ |
+| 4 | Rudder (Kuyruk Dikey) | Servo | D7 | A / D |
 
-### Voltaj Bölücü Devresi
-```
-Pil (+) ----[R1=10kΩ]----+---- A0
-                          |
-                       [R2=2.2kΩ]
-                          |
-Pil (-) -----------------+---- GND
-```
+**Dual Aileron:** Alıcıda otomatik mixing yapılır. Vericiden gelen tek `aileron` değeri:
+- Sağ kanat (D5) = aynı yönde
+- Sol kanat (D4) = ters yönde (3000 - aileron)
 
-### Verici Arduino Nano
-| Pin | Bağlantı |
-|-----|----------|
-| D9 | NRF24L01+ CE |
-| D10 | NRF24L01+ CSN |
-| D11 | NRF24L01+ MOSI |
-| D12 | NRF24L01+ MISO |
-| D13 | NRF24L01+ SCK |
-| USB | Steam Deck / Bilgisayar |
-| 3.3V | NRF24L01+ VCC |
+Sağa roll → sağ kanat yukarı, sol kanat aşağı. Sola roll → tam tersi.
+
+## NRF24L01 Bağlantısı
+
+### Shield/Adaptör varsa (önerilen)
+
+| NRF24L01 Shield | Arduino Nano |
+|-----------------|-------------|
+| VCC | **5V** |
 | GND | GND |
+| CE | D9 |
+| CSN | D10 |
+| SCK | D13 |
+| MOSI | D11 |
+| MISO | D12 |
+
+### Çıplak modül (shield yok)
+
+| NRF24L01 | Arduino Nano |
+|----------|-------------|
+| VCC | **3.3V** |
+| GND | GND |
+| CE | D9 |
+| CSN | D10 |
+| SCK | D13 |
+| MOSI | D11 |
+| MISO | D12 |
+
+> Shield varsa VCC→5V, yoksa VCC→3.3V. Çıplak modülde VCC-GND arasına 10-100µF kondansatör şart.
+
+---
+
+## Alıcı (Receiver) Bağlantıları
+
+```
+                            +-----------+
+      LiPo Pil              | Arduino   |
+      +   -                 | Nano      |
+      |   |                 |           |
+      |   |    NRF24L01     |           |    Sag Aileron D5
+      |   |    +-------+    |           |    Sol Aileron D4 (ters)
+      |   |    | VCC --|----|5V/3.3V    |    Elevator     D6
+      |   |    | GND --|----|GND        |    Rudder       D7
+      |   |    | CE  --|----|D9         |
+      |   |    | CSN --|----|D10        |
+      |   |    | SCK --|----|D13        |
+      |   |    | MOSI -|----|D11        |
+      |   |    | MISO -|----|D12        |
+      |   |    +-------+    |           |
+      |   |                 |           |
+      |   |    ESC          |           |
+      |   |    +--------+   |           |
+      +---|----|Pil +   |   |           |
+          |    |Pil -   |   |           |
+          |    |Motor A |   |           |
+          |    |Motor B +---+ Motor     |
+          |    |Motor C |   |           |
+          |    |Sinyal--|---|D3         |
+          |    |GND   --|---|GND        |
+          |    |5V(BEC) |  (USB varsa boş)
+          |    +--------+  (USB yoksa VIN)
+```
+
+### Alıcı Pin Tablosu
+
+| Pin    | Bağlantı            | Açıklama                             |
+|--------|---------------------|--------------------------------------|
+| D3     | ESC Sinyal          | PWM (1000-2000µs)                    |
+| D4     | Sol Kanat Aileron   | D5'in tersi (otomatik mix)           |
+| D5     | Sağ Kanat Aileron   | Roll komutu                          |
+| D6     | Elevator            | Kuyruk yatay                         |
+| D7     | Rudder              | Kuyruk dikey                         |
+| GND    | ESC GND + Servo GND | Ortak toprak                         |
+| 5V/VIN | ESC BEC 5V          | USB yoksa bağla, USB varsa boş bırak |
+
+---
+
+## Verici (Transmitter) Bağlantıları
+
+```
+      PC (USB)
+         |
+    Arduino Nano
+         |
+    NRF24L01 (Shield)
+```
+
+Sadece NRF24L01 bağlı. PC'ye USB ile bağlı.
+
+---
 
 ## Kurulum
 
-### Arduino
-1. Arduino IDE'de `RF24` kütüphanesini kur (Library Manager'dan)
-2. `Servo` kütüphanesi dahili olarak gelir
-3. `receiver/airplane_receiver/airplane_receiver.ino` → Uçak Arduino'suna yükle
-4. `transmitter/ground_transmitter/ground_transmitter.ino` → Verici Arduino'suna yükle
-
-### Web Arayüzü (Steam Deck / Bilgisayar)
 ```bash
-cd ground_station_web
-pip3 install -r requirements.txt
-python3 app.py
+# 1. Python sanal ortam
+python3 -m venv venv
+source venv/bin/activate
+pip install pyserial
+
+# 2. Arduino IDE'de RF24 kütüphanesini yükle
+#    Araçlar > Kütüphane Yöneticisi > "RF24 by TMRh20"
+
+# 3. transmitter/transmitter.ino → Verici Nano'ya yükle
+# 4. receiver/receiver.ino      → Alıcı Nano'ya yükle
+
+# 5. Çalıştır
+python3 control.py
 ```
 
-Tarayıcıda **http://localhost:8080** adresini aç.
+## Kullanım
 
-## Kontroller
+Alıcıyı aç (pili bağla), ESC arm sesini bekle (3 sn), sonra:
 
-### Klavye
+```bash
+source venv/bin/activate
+python3 control.py
+```
+
 | Tuş | İşlev |
 |-----|-------|
-| ← → | Aileron (roll) |
-| ↑ ↓ | Elevator (pitch) |
-| W / S | Throttle (gaz) |
-| Z / X | Rudder (yön) |
-| C | Arduino'ya bağlan |
-| D | Bağlantıyı kes |
-| L | Uçuş kaydını başlat/durdur |
+| **W** | Gaz artır |
+| **S** | Gaz azalt |
+| **A / D** | Rudder (kuyruk dikey) |
+| **← →** | Aileron (kanat roll) |
+| **↑ ↓** | Elevator (kuyruk yatay) |
+| **Space** | Acil gaz kes |
+| **Q** | Çıkış |
 
-### Gamepad (Steam Deck / USB Joystick)
-| Çubuk | Kontrol |
-|-------|---------|
-| Sol Stick | Aileron + Elevator |
-| Sağ Stick | Rudder + Throttle |
-| A | Arduino'ya bağlan |
-| B | Bağlantıyı kes |
-| Y | Log başlat/durdur |
+### Güvenlik
 
-## Uçuş Kayıtları
-- `ground_station_web/logs/` klasörüne CSV olarak kaydedilir
-- Zaman damgası, tüm kanal değerleri ve telemetri içerir
-
-## Telemetri
-- **Pil Voltajı:** 3S LiPo (9.9V boş - 12.6V dolu)
-- **RSSI:** Sinyal gücü (0-100%)
-- **Failsafe:** 500ms sinyal kaybında aktif olur, servolar merkeze throttle minimuma döner
-
-## LED Durumu (Uçak)
-| Durum | LED |
-|-------|-----|
-| Normal | Sürekli YANIK |
-| Bağlantı bekleniyor | Yavaş yanıp sönme |
-| Failsafe | Hızlı yanıp sönme |
-
-## Protokol
-
-### Kontrol Paketi (NRF24L01+)
-| Byte | İçerik | Aralık |
-|------|--------|--------|
-| 0 | Header | 0xC0 |
-| 1-2 | Aileron | 1000-2000 |
-| 3-4 | Elevator | 1000-2000 |
-| 5-6 | Rudder | 1000-2000 |
-| 7-8 | Throttle | 1000-2000 |
-
-### Seri Protokol (Web ↔ TX Arduino)
-Gönderim: `[0xC0][CH1H][CH1L][CH2H][CH2L][CH3H][CH3L][CH4H][CH4L][CRC][0x0A]`
-
-Telemetri: `TEL:millivolt,rssi,flags\n`
-
-## NRF24L01+ Ayarları
-Her iki Arduino'da aynı ayarlar olmalı:
-- Kanal: 108
-- Veri hızı: 250kbps (menzil öncelikli)
-- Güç seviyesi: HIGH
-- Adres: "RC01"
+- Alıcı 1 saniyeden fazla sinyal alamazsa otomatik gaz keser (failsafe)
+- Çıkışta (Q) gaz otomatik 1000'e çekilir
+- ESC arm olana kadar bekle (bip sesi)
+- **Pervaneyi takmadan önce sistemi test et**
