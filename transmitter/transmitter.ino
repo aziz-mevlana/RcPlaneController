@@ -81,6 +81,8 @@ void loop() {
       packet.aux      = buf[8] | (buf[9] << 8);
 
       radio.write(&packet, sizeof(packet));
+      delayMicroseconds(500);
+      radio.write(&packet, sizeof(packet));
     } else {
       Serial.read(); // bayt temizle
     }

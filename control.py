@@ -146,10 +146,10 @@ class RcController:
         self.ser.flush()
         self.print_state()
 
-    def _bar(self, value, width=20):
+    def _bar(self, value, width=10):
         pct = (value - 1000) / 1000.0
         filled = max(0, min(width, int(pct * width)))
-        return "|" + "█" * filled + "░" * (width - filled) + "|"
+        return "[" + "█" * filled + "░" * (width - filled) + "]"
 
     def _axis_bar(self, value, width=10):
         normalized = (value + 1.0) / 2.0
@@ -157,36 +157,12 @@ class RcController:
         return "|" + "█" * filled + "░" * (width - filled) + "|"
 
     def print_state(self):
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.write("=== RC Plane Kontrol ===\n")
-        sys.stdout.write("W/S: Gaz  A/D: Rudder  Oklar: Elev/Aileron  Space: Kes  Q: Cikis\n")
-
-        if self.joy and self.joy.connected:
-            sys.stdout.write(f"\n  Joystick: {self.joy.joy_name}\n")
-            sys.stdout.write(f"  Axes: {self.joy.num_axes}  Buttons: {self.joy.num_buttons}\n")
-            sys.stdout.write("\n")
-            sys.stdout.write("  Joy Axes:\n")
-            for i, v in self.joy.axes.items():
-                bar = self._axis_bar(v)
-                sys.stdout.write(f"    Axis {i}: {v:+.2f}  {bar}\n")
-            sys.stdout.write("  Joy Buttons:\n")
-            for i, v in self.joy.buttons.items():
-                state = "BASILI" if v else "---"
-                sys.stdout.write(f"    Button {i}: {state}\n")
-            if self.joy.hats:
-                sys.stdout.write("  Joy Hats:\n")
-                for i, v in self.joy.hats.items():
-                    sys.stdout.write(f"    Hat {i}: {v}\n")
-        else:
-            sys.stdout.write("\n  Joystick: Bagli degil\n")
-
-        sys.stdout.write("\n")
-        sys.stdout.write("  Gaz       {:4d}  {}\n".format(self.throttle, self._bar(self.throttle)))
-        sys.stdout.write("  Aileron   {:4d}  {}\n".format(self.aileron, self._bar(self.aileron)))
-        sys.stdout.write("  Elevator  {:4d}  {}\n".format(self.elevator, self._bar(self.elevator)))
-        sys.stdout.write("  Rudder    {:4d}  {}\n".format(self.rudder, self._bar(self.rudder)))
-        sys.stdout.write("\n  (Alicida dual aileron mix: Sag=D5, Sol=D4)\n")
-        sys.stdout.write("\n")
+        sys.stdout.write("\033c")
+        t_bar = self._bar(self.throttle)
+        a_bar = self._bar(self.aileron)
+        e_bar = self._bar(self.elevator)
+        r_bar = self._bar(self.rudder)
+        sys.stdout.write(f"T:{self.throttle:4d}{t_bar} A:{self.aileron:4d}{a_bar} E:{self.elevator:4d}{e_bar} D:{self.rudder:4d}{r_bar}\n")
         sys.stdout.flush()
 
     def handle_key(self, key):
@@ -307,7 +283,7 @@ class RcController:
                         key += seq
                     self.handle_key(key)
                     last_send = time.time()
-                elif time.time() - last_send > 0.2:
+                elif time.time() - last_send > 0.5:
                     self.send_state()
                     last_send = time.time()
         finally:

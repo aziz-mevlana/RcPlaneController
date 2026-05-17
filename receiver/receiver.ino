@@ -64,13 +64,67 @@ const int PIN_RIGHT_AILERON  = 5;
 const int PIN_LEFT_AILERON   = 4;
 const int PIN_ELEVATOR       = 6;
 const int PIN_RUDDER         = 7;
+const int PIN_LED            = LED_BUILTIN;
 
 unsigned long lastPacketTime = 0;
+unsigned long lastResetAttempt = 0;
 bool armed = false;
+bool linkLost = false;
+int resetAttempts = 0;
+
+uint16_t currentThrottle = 1000;
+uint16_t currentAileron = 1500;
+uint16_t currentElevator = 1500;
+uint16_t currentRudder = 1500;
+
+uint16_t targetThrottle = 1000;
+uint16_t targetAileron = 1500;
+uint16_t targetElevator = 1500;
+uint16_t targetRudder = 1500;
+
+void resetRadio() {
+  radio.stopListening();
+  radio.begin();
+  radio.openReadingPipe(0, rxAddress);
+  radio.setPALevel(RF24_PA_LOW);
+  radio.setDataRate(RF24_250KBPS);
+  radio.setChannel(108);
+  radio.setPayloadSize(sizeof(packet));
+  radio.setAutoAck(false);
+  radio.startListening();
+}
+
+void centerServos() {
+  targetThrottle = 1000;
+  targetAileron = 1500;
+  targetElevator = 1500;
+  targetRudder = 1500;
+  currentThrottle = 1000;
+  currentAileron = 1500;
+  currentElevator = 1500;
+  currentRudder = 1500;
+  esc.writeMicroseconds(1000);
+  servoRightAileron.writeMicroseconds(1500);
+  servoLeftAileron.writeMicroseconds(1500);
+  servoElevator.writeMicroseconds(1500);
+  servoRudder.writeMicroseconds(1500);
+}
+
+uint16_t smoothMove(uint16_t current, uint16_t target, uint16_t maxStep) {
+  if (current < target) {
+    return min(target, current + maxStep);
+  } else if (current > target) {
+    return max(target, current - maxStep);
+  }
+  return current;
+}
 
 void setup() {
   Serial.begin(115200);
   while (!Serial);
+
+  pinMode(PIN_LED, OUTPUT);
+  digitalWrite(PIN_LED, LOW);
 
   if (!radio.begin()) {
     Serial.println(F("NRF24L01 baslatilamadi!"));
@@ -110,31 +164,57 @@ void loop() {
     radio.read(&packet, sizeof(packet));
     lastPacketTime = millis();
 
-    // Dual aileron mixing: sag ve sol kanat ters yonde hareket eder
-    uint16_t rightAileron = packet.aileron;
-    uint16_t leftAileron  = 3000 - packet.aileron;  // ters
+    if (linkLost) {
+      linkLost = false;
+      resetAttempts = 0;
+      digitalWrite(PIN_LED, HIGH);
+      Serial.println(F("++ Baglanti yeniden kuruldu"));
+    }
 
-    esc.writeMicroseconds(packet.throttle);
-    servoRightAileron.writeMicroseconds(rightAileron);
-    servoLeftAileron.writeMicroseconds(leftAileron);
-    servoElevator.writeMicroseconds(packet.elevator);
-    servoRudder.writeMicroseconds(packet.rudder);
+    targetThrottle = packet.throttle;
+    targetAileron  = packet.aileron;
+    targetElevator = packet.elevator;
+    targetRudder   = packet.rudder;
 
     Serial.print(F("<< T:"));
     Serial.print(packet.throttle);
     Serial.print(F(" R:"));
     Serial.print(packet.aileron);
-    Serial.print(F(" L:"));
-    Serial.print(leftAileron);
     Serial.print(F(" E:"));
     Serial.print(packet.elevator);
     Serial.print(F(" D:"));
     Serial.println(packet.rudder);
   }
 
-  if (armed && millis() - lastPacketTime > 1000) {
-    esc.writeMicroseconds(1000);
-    Serial.println(F("!! Sinyal kesildi - Gaz KESILDI !!"));
+  currentThrottle = smoothMove(currentThrottle, targetThrottle, 5);
+  currentAileron  = smoothMove(currentAileron, targetAileron, 5);
+  currentElevator = smoothMove(currentElevator, targetElevator, 5);
+  currentRudder   = smoothMove(currentRudder, targetRudder, 5);
+
+  esc.writeMicroseconds(currentThrottle);
+  servoRightAileron.writeMicroseconds(currentAileron);
+  servoLeftAileron.writeMicroseconds(3000 - currentAileron);
+  servoElevator.writeMicroseconds(currentElevator);
+  servoRudder.writeMicroseconds(currentRudder);
+
+  if (armed && millis() - lastPacketTime > 1500) {
+    if (!linkLost) {
+      linkLost = true;
+      centerServos();
+      Serial.println(F("!! Sinyal kesildi - Servolar merkezlendi !!"));
+    }
+
+    digitalWrite(PIN_LED, !digitalRead(PIN_LED));
+
+    if (millis() - lastResetAttempt > 5000 && resetAttempts < 3) {
+      Serial.print(F("!! NRF yeniden baslatiliyor ("));
+      Serial.print(resetAttempts + 1);
+      Serial.println(F("/3)"));
+      resetRadio();
+      lastResetAttempt = millis();
+      resetAttempts++;
+    }
+
     lastPacketTime = millis();
   }
 }
