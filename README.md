@@ -136,29 +136,26 @@ pip install -r requirements.txt
 
 Alıcıyı aç (pili bağla), ESC arm sesini bekle (3 sn), sonra:
 
-### Klavye
-
 ```bash
 source venv/bin/activate
 python3 control.py
 ```
 
+Pygame penceresi açılır. Joystick bağlıysa otomatik algılanır, stick pozisyonları
+canlı gösterilir. Klavye ve joystick aynı anda çalışır.
+
+### Klavye
+
 | Tuş | İşlev |
 |-----|-------|
-| **W** | Gaz artır |
-| **S** | Gaz azalt |
+| **W / S** | Gaz artır / azalt |
 | **A / D** | Rudder (kuyruk dikey) |
 | **← →** | Aileron (kanat roll) |
 | **↑ ↓** | Elevator (kuyruk yatay) |
 | **Space** | Acil gaz kes |
-| **Q** | Çıkış |
+| **Q / ESC** | Çıkış |
 
 ### Steam Deck / Joystick
-
-```bash
-source venv/bin/activate
-python3 control.py --joystick
-```
 
 | Kumanda | Kanal |
 |---------|-------|
