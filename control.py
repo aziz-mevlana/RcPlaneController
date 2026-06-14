@@ -103,22 +103,14 @@ class LinuxJoy:
             if any(kw in name.lower() for kw in keywords):
                 self._dev = dev
                 self._name = f"{name}"
-                # grab dene (Steam kapmissa haber ver)
-                try:
-                    self._dev.grab()
-                    print(f"  [EV] grab OK")
-                except Exception:
-                    print(f"  [EV] grab BASARISIZ - Steam aciK olabilir")
+                print(f"  [EV] secildi: {name}")
                 return
 
         # fallback: ilk ABS cihazi
         dev, name, path = candidates[0]
         self._dev = dev
         self._name = f"{name}"
-        try:
-            self._dev.grab()
-        except Exception:
-            print(f"  [EV] grab BASARISIZ")
+        print(f"  [EV] secildi (fallback): {name}")
 
     def _drain_init(self):
         # baslangic durumunu oku
@@ -179,9 +171,7 @@ class LinuxJoy:
             except Exception:
                 break
             r, _, _ = sel.select([self._dev.fd], [], [], 0)
-        if total:
-            print(f"[EV] poll: {total} event okundu", end="\r")
-        return new_presses
+        return new_presses, total
 
     def get_axis(self, n):
         return self._axes.get(n, 0.0)
@@ -257,7 +247,9 @@ class _BaseCtrl:
 
     def _poll_joy_axes(self, now_ms):
         changed = False
-        for btn in self.joy.poll():
+        buttons, ev_count = self.joy.poll()
+        self._joy_ev_count = ev_count
+        for btn in buttons:
             self._joybutton(btn)
             changed = True
 
@@ -399,7 +391,8 @@ class TtyController(_BaseCtrl):
             ay = self.joy.get_axis(self.ax_elevator)
             ax = self.joy.get_axis(self.ax_aileron)
             rx = self.joy.get_axis(self.ax_rudder)
-            sys.stdout.write(f"| ail={ax:+.2f} elev={ay:+.2f} rudd={rx:+.2f}")
+            ev = getattr(self, '_joy_ev_count', 0)
+            sys.stdout.write(f"| ail={ax:+.2f} elev={ay:+.2f} rudd={rx:+.2f} ev={ev}")
         sys.stdout.write("\n")
         sys.stdout.flush()
 
