@@ -34,6 +34,75 @@ RED     = (240, 70, 60)
 DIM     = (90, 90, 110)
 
 
+# ═══════════════════════════════════════════════════════════════
+# Raw Linux Joystick — /dev/input/js0 dogrudan okuma
+# Steam / SDL / pygame'den bagimsiz, her zaman calisir
+# ═══════════════════════════════════════════════════════════════
+
+class RawJoystick:
+    """Linux /dev/input/js0 ham okuyucu. pygame Joystick arayuzu taklit eder."""
+
+    JS_EVENT_BUTTON = 0x01
+    JS_EVENT_AXIS   = 0x02
+
+    def __init__(self, path="/dev/input/js0"):
+        self._path = path
+        self._fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        self._axes = {}
+        self._buttons = {}
+        self._prev_buttons = {}
+        self._name = f"RawJoy ({path})"
+
+    def poll(self):
+        """Pending tum eventleri oku. Yeni basilan button'lari doner."""
+        new_presses = []
+        while True:
+            try:
+                data = os.read(self._fd, 8)
+                if len(data) < 8:
+                    break
+                _time, value, etype, number = struct.unpack('<IhBB', data)
+
+                if etype & self.JS_EVENT_AXIS:
+                    norm = max(-1.0, min(1.0, value / 32767.0))
+                    self._axes[number] = norm
+
+                elif etype & self.JS_EVENT_BUTTON:
+                    pressed = value != 0
+                    if pressed and not self._prev_buttons.get(number, False):
+                        new_presses.append(number)
+                    self._prev_buttons[number] = pressed
+                    self._buttons[number] = pressed
+
+            except BlockingIOError:
+                break
+        return new_presses
+
+    def get_axis(self, n):
+        return self._axes.get(n, 0.0)
+
+    def get_button(self, n):
+        return self._buttons.get(n, False)
+
+    def get_hat(self, n):
+        base = 6 + n * 2
+        return (int(self.get_axis(base)), int(self.get_axis(base + 1)))
+
+    def get_name(self):
+        return self._name
+
+    def quit(self):
+        pass  # uyumluluk
+
+    def close(self):
+        try:
+            os.close(self._fd)
+        except OSError:
+            pass
+
+
+# ═══════════════════════════════════════════════════════════════
+
 class RcController:
     def __init__(self, port):
         self.ser = serial.Serial(port, BAUD, timeout=0)
@@ -60,14 +129,22 @@ class RcController:
         self.joy_connected = False
         self.joy_name = ""
         self.joy = None
+        self.use_raw_joy = False
+        self.rudder_axis = 2    # Steam Deck: sag stick X
         self._init_joystick()
 
         self.last_hat_time = 0
         self.last_trigger_time = 0
 
+        self._debug_start = pygame.time.get_ticks()
+        self._debug_seen = set()
+
         self.send_state()
 
+    # ─── joystick init ─────────────────────────────────────
+
     def _init_joystick(self):
+        # 1) pygame dene
         pygame.joystick.init()
         count = pygame.joystick.get_count()
         if count > 0:
@@ -75,7 +152,27 @@ class RcController:
             self.joy.init()
             self.joy_connected = True
             self.joy_name = self.joy.get_name()
-            print(f"Joystick baglandi: {self.joy_name}")
+            self.use_raw_joy = False
+            print(f"[JOY] pygame: {self.joy_name}")
+            return
+
+        # 2) /dev/input/js0 raw fallback
+        if os.path.exists("/dev/input/js0"):
+            try:
+                self.joy = RawJoystick("/dev/input/js0")
+                self.joy_connected = True
+                self.joy_name = self.joy.get_name()
+                self.use_raw_joy = True
+                print(f"[JOY] raw: {self.joy_name}")
+                print("[DBG] Ilk 5 sn axis/button numaralarini konsola yaziyor...")
+                return
+            except PermissionError:
+                print("[JOY] /dev/input/js0 izin hatasi!")
+                print("[JOY] Cozum: sudo usermod -a -G input $USER && reboot")
+
+        print("[JOY] Joystick bulunamadi - klavye modu")
+
+    # ─── serial ────────────────────────────────────────────
 
     def send_state(self):
         data = b'\xaa' + struct.pack("<HHHHH",
@@ -85,13 +182,15 @@ class RcController:
         self.ser.write(data)
         self.ser.flush()
 
+    # ─── events ────────────────────────────────────────────
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
                 self._keydown(event.key)
-            elif event.type == pygame.JOYBUTTONDOWN:
+            elif event.type == pygame.JOYBUTTONDOWN and not self.use_raw_joy:
                 self._joybutton(event.button)
 
     def _keydown(self, key):
@@ -126,14 +225,23 @@ class RcController:
         elif button == 9:
             self.running = False
 
+    # ─── joystick poll ─────────────────────────────────────
+
     def poll_joystick(self):
         if not self.joy_connected:
             return
 
         now = pygame.time.get_ticks()
 
+        # raw mod: once tum eventleri oku
+        if self.use_raw_joy:
+            for btn in self.joy.poll():
+                self._debug("button", btn, 1.0)
+                self._joybutton(btn)
+
         # --- Left Stick X -> Aileron ---
         ax = self._deadzone(self.joy.get_axis(0))
+        self._debug("axis", 0, ax)
         if ax is not None:
             v = max(1000, min(2000, int(1500 + ax * 500)))
             if v != self.aileron:
@@ -143,6 +251,7 @@ class RcController:
 
         # --- Left Stick Y -> Elevator ---
         ay = self._deadzone(self.joy.get_axis(1))
+        self._debug("axis", 1, ay)
         if ay is not None:
             v = max(1000, min(2000, int(1500 + ay * 500)))
             if v != self.elevator:
@@ -151,7 +260,8 @@ class RcController:
             self.elevator = 1500; self.changed = True
 
         # --- Right Stick X -> Rudder ---
-        rx = self._deadzone(self.joy.get_axis(3))
+        rx = self._deadzone(self.joy.get_axis(self.rudder_axis))
+        self._debug("axis", self.rudder_axis, rx)
         if rx is not None:
             v = max(1000, min(2000, int(1500 + rx * 500)))
             if v != self.rudder:
@@ -162,10 +272,12 @@ class RcController:
         # --- L2/R2 -> Throttle (incremental, her 100ms) ---
         if now - self.last_trigger_time >= 100:
             l2 = self.joy.get_axis(4)
+            self._debug("axis", 4, l2)
             if l2 > 0.1:
                 self.throttle = min(2000, self.throttle + int(l2 * STEP))
                 self.changed = True
             r2 = self.joy.get_axis(5)
+            self._debug("axis", 5, r2)
             if r2 > 0.1:
                 self.throttle = max(1000, self.throttle - int(r2 * STEP))
                 self.changed = True
@@ -174,6 +286,7 @@ class RcController:
         # --- D-Pad -> Aileron / Elevator (her 100ms) ---
         if now - self.last_hat_time >= 100:
             hat = self.joy.get_hat(0)
+            self._debug("hat", 0, hat)
             if hat[0] == -1:
                 self.aileron = max(1000, self.aileron - STEP); self.changed = True
             elif hat[0] == 1:
@@ -185,7 +298,27 @@ class RcController:
             self.last_hat_time = now
 
     def _deadzone(self, val):
-        return val if abs(val) > DEADZONE else None
+        return val if (val is not None and abs(val) > DEADZONE) else None
+
+    def _debug(self, kind, num, val):
+        """Ilk 5 saniye hangi axis/button/hat hareket ediyor konsola yaz."""
+        if pygame.time.get_ticks() - self._debug_start > 5000:
+            return
+        key = (kind, num)
+        if key in self._debug_seen:
+            return
+        # sadece anlamli hareket varsa yaz
+        if kind == "axis":
+            if val is None or abs(val) < 0.05:
+                return
+            print(f"[DBG] axis {num:2d}  = {val:+7.3f}")
+        elif kind == "button":
+            print(f"[DBG] btn  {num:2d}  pressed")
+        elif kind == "hat":
+            if val[0] == 0 and val[1] == 0:
+                return
+            print(f"[DBG] hat  {num}    = {val}")
+        self._debug_seen.add(key)
 
     # ─── draw ────────────────────────────────────────────────
 
@@ -198,7 +331,8 @@ class RcController:
         self.screen.blit(t, (16, 8))
 
         if self.joy_connected:
-            st = f"🕹 {self.joy_name[:32]}"
+            tag = "[RAW]" if self.use_raw_joy else "[PYG]"
+            st = f"{tag} {self.joy_name[:28]}"
             sc = GREEN
         else:
             st = "Joystick yok — klavye modu"
@@ -209,13 +343,13 @@ class RcController:
         # stick okuma (cizim icin, gonderimden bagimsiz)
         jax0 = self.joy.get_axis(0) if self.joy_connected else 0.0
         jax1 = self.joy.get_axis(1) if self.joy_connected else 0.0
-        jax3 = self.joy.get_axis(3) if self.joy_connected else 0.0
+        jax_r = self.joy.get_axis(self.rudder_axis) if self.joy_connected else 0.0
         jax4 = self.joy.get_axis(4) if self.joy_connected else 0.0
         jax5 = self.joy.get_axis(5) if self.joy_connected else 0.0
 
         # sticks
         self._draw_stick(190, 210, jax0, jax1, "AILERON", "ELEVATOR")
-        self._draw_stick(590, 210, jax3, 0.0, "RUDDER", "")
+        self._draw_stick(590, 210, jax_r, 0.0, "RUDDER", "")
 
         # throttle bar
         bx, by, bw, bh = 110, 388, 580, 26
@@ -345,6 +479,8 @@ class RcController:
         self.ser.close()
         if self.joy:
             self.joy.quit()
+            if self.use_raw_joy:
+                self.joy.close()
         pygame.joystick.quit()
         pygame.quit()
 
