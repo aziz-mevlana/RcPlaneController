@@ -86,6 +86,7 @@ class LinuxJoy:
                 dev = evdev.InputDevice(path)
                 caps = dev.capabilities()
                 if ecodes.EV_ABS in caps:
+                    print(f"  [EV] {path}: {dev.name}")
                     candidates.append((dev, dev.name, path))
                 else:
                     dev.close()
@@ -102,12 +103,22 @@ class LinuxJoy:
             if any(kw in name.lower() for kw in keywords):
                 self._dev = dev
                 self._name = f"{name}"
+                # grab dene (Steam kapmissa haber ver)
+                try:
+                    self._dev.grab()
+                    print(f"  [EV] grab OK")
+                except Exception:
+                    print(f"  [EV] grab BASARISIZ - Steam aciK olabilir")
                 return
 
         # fallback: ilk ABS cihazi
         dev, name, path = candidates[0]
         self._dev = dev
         self._name = f"{name}"
+        try:
+            self._dev.grab()
+        except Exception:
+            print(f"  [EV] grab BASARISIZ")
 
     def _drain_init(self):
         # baslangic durumunu oku
@@ -149,10 +160,12 @@ class LinuxJoy:
     def poll(self):
         """Non-blocking event okuma. Yeni basilan JS button numaralarini doner."""
         new_presses = []
+        total = 0
         r, _, _ = sel.select([self._dev.fd], [], [], 0)
         while r:
             try:
                 for ev in self._dev.read():
+                    total += 1
                     if ev.type == ecodes.EV_ABS:
                         self._apply_abs(ev)
                     elif ev.type == ecodes.EV_KEY:
@@ -166,6 +179,8 @@ class LinuxJoy:
             except Exception:
                 break
             r, _, _ = sel.select([self._dev.fd], [], [], 0)
+        if total:
+            print(f"[EV] poll: {total} event okundu", end="\r")
         return new_presses
 
     def get_axis(self, n):
