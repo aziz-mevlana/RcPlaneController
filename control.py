@@ -57,27 +57,32 @@ class RawLinuxJoy:
         self._event_count = 0
         self._poll_count = 0
 
-        # 1) js0-js4 tara
-        for i in range(5):
-            path = f"/dev/input/js{i}"
-            if self._try_js(path):
-                return
-
-        # 2) evdev event* tara (event0-event15)
+        # 1) evdev event* tara (daha guvenilir, canli event akisi)
+        print("  [EV] event cihazlari taniyor...")
+        for i in range(16):
+            name = self._read_sysfs_name(i)
+            if not name:
+                continue
+            print(f"  [EV] event{i}: {name}")
         for i in range(16):
             path = f"/dev/input/event{i}"
             name = self._read_sysfs_name(i)
             if name and any(kw in name.lower() for kw in
                             ("gamepad", "joystick", "steam deck",
                              "controller", "xbox", "playstation", "dualshock",
-                             "dualsense", "8bitdo", "generic")):
+                             "dualsense", "8bitdo", "generic", "deck")):
                 if self._try_evdev(path, name):
                     return
-
-        # 3) evdev tum event* dene (isim filtresiz, ABS_X varsa kullan)
+        # isim filtresiz tum event* dene
         for i in range(16):
             path = f"/dev/input/event{i}"
             if self._try_evdev(path, f"event{i}"):
+                return
+
+        # 2) js0-js4 fallback
+        for i in range(5):
+            path = f"/dev/input/js{i}"
+            if self._try_js(path):
                 return
 
         raise RuntimeError("Joystick bulunamadi")
@@ -149,10 +154,13 @@ class RawLinuxJoy:
         except Exception:
             return False
 
-        # read initial events (calibration)
+        # read initial events (calibration) — select ile bekle
         has_abs = False
-        deadline = time.time() + 0.5
+        deadline = time.time() + 0.6
         while time.time() < deadline:
+            r, _, _ = sel.select([fd], [], [], 0.2)
+            if not r:
+                continue
             try:
                 data = os.read(fd, 24)
                 if len(data) < 24:
@@ -160,11 +168,10 @@ class RawLinuxJoy:
                 etype, code, value = self._parse_evdev(data)
                 if etype == 0x03:  # EV_ABS
                     has_abs = True
-                    # auto-range: track min/max
                     cur = self._axes_range.get(code, [value, value])
                     self._axes_range[code] = [min(cur[0], value), max(cur[1], value)]
-            except BlockingIOError:
-                time.sleep(0.02)
+            except (BlockingIOError, OSError):
+                pass
 
         if not has_abs:
             os.close(fd)
@@ -188,8 +195,9 @@ class RawLinuxJoy:
                 data = os.read(self._fd, 24)
                 if len(data) < 24:
                     break
+                self._event_count += 1
                 self._apply_evdev(data)
-            except BlockingIOError:
+            except (BlockingIOError, OSError):
                 break
 
     def _parse_evdev(self, data):
@@ -206,17 +214,14 @@ class RawLinuxJoy:
     def _apply_evdev(self, data):
         etype, code, value = self._parse_evdev(data)
         if etype == 0x03:  # EV_ABS
-            # expand range
             cur = self._axes_range.get(code, [value, value])
             self._axes_range[code] = [min(cur[0], value), max(cur[1], value)]
-            # normalize
             lo, hi = self._axes_range[code]
             rng = hi - lo
-            if rng > 0:
+            if rng > 1:
                 norm = -1.0 + 2.0 * (value - lo) / rng
-            else:
-                norm = 0.0
-            self._axes[code] = max(-1.0, min(1.0, norm))
+                self._axes[code] = max(-1.0, min(1.0, norm))
+            # else: range yok, eski deger kalsin
         elif etype == 0x01:  # EV_KEY
             self._buttons[code] = value != 0
 
@@ -262,8 +267,9 @@ class RawLinuxJoy:
                     lo, hi = min(lo, value), max(hi, value)
                     self._axes_range[code] = [lo, hi]
                     rng = hi - lo
-                    norm = -1.0 + 2.0 * (value - lo) / rng if rng > 0 else 0.0
-                    self._axes[code] = max(-1.0, min(1.0, norm))
+                    if rng > 1:
+                        norm = -1.0 + 2.0 * (value - lo) / rng
+                        self._axes[code] = max(-1.0, min(1.0, norm))
                 elif etype == 0x01:
                     pressed = value != 0
                     if pressed and not self._prev_buttons.get(code, False):
