@@ -54,6 +54,8 @@ class RawLinuxJoy:
         self._axes_range = {}   # axis_number -> (min, max)  evdev icin
         self._is_evdev = False
         self._name = ""
+        self._event_count = 0
+        self._poll_count = 0
 
         # 1) js0-js4 tara
         for i in range(5):
@@ -131,11 +133,12 @@ class RawLinuxJoy:
                 if len(data) < 8:
                     break
                 _, value, etype, number = struct.unpack('<IhBB', data)
+                self._event_count += 1
                 if etype & 0x02:
                     self._axes[number] = max(-1.0, min(1.0, value / 32767.0))
                 elif etype & 0x01:
                     self._buttons[number] = value != 0
-            except BlockingIOError:
+            except (BlockingIOError, OSError):
                 break
 
     # ── evdev deneme ───────────────────────────────────────
@@ -234,6 +237,7 @@ class RawLinuxJoy:
                 if len(data) < 8:
                     break
                 _, value, etype, number = struct.unpack('<IhBB', data)
+                self._event_count += 1
                 if etype & 0x02:
                     self._axes[number] = max(-1.0, min(1.0, value / 32767.0))
                 elif etype & 0x01:
@@ -242,7 +246,7 @@ class RawLinuxJoy:
                         new_presses.append(number)
                     self._prev_buttons[number] = pressed
                     self._buttons[number] = pressed
-            except BlockingIOError:
+            except (BlockingIOError, OSError):
                 break
 
     def _poll_evdev(self, new_presses):
@@ -251,6 +255,7 @@ class RawLinuxJoy:
                 data = os.read(self._fd, 24)
                 if len(data) < 24:
                     break
+                self._event_count += 1
                 etype, code, value = self._parse_evdev(data)
                 if etype == 0x03:
                     lo, hi = self._axes_range.get(code, [value, value])
@@ -265,8 +270,17 @@ class RawLinuxJoy:
                         new_presses.append(code)
                     self._prev_buttons[code] = pressed
                     self._buttons[code] = pressed
-            except BlockingIOError:
+            except (BlockingIOError, OSError):
                 break
+
+    # ── diagnostic ───────────────────────────────────────
+
+    def diagnostic(self):
+        """Periyodik durum. (event_count, poll_count) doner."""
+        ec = self._event_count
+        pc = self._poll_count
+        self._poll_count += 1
+        return ec, pc
 
     # ── pygame uyumlu arayuz ───────────────────────────────
 
@@ -666,6 +680,7 @@ class RcController:
 
     def run(self):
         pygame.key.set_repeat(200, 100)
+        last_diag = 0
 
         while self.running:
             self.handle_events()
@@ -677,6 +692,12 @@ class RcController:
                 self.send_state()
                 self.changed = False
                 self.last_send = now
+
+            # 2 saniyede bir diagnostik
+            if self.use_raw_joy and now - last_diag > 2000:
+                ec, pc = self.joy.diagnostic()
+                print(f"[RAW] event={ec} poll=#{pc}")
+                last_diag = now
 
             self.draw()
             self.clock.tick(FPS)
