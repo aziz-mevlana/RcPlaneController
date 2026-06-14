@@ -144,19 +144,7 @@ class RcController:
     # ─── joystick init ─────────────────────────────────────
 
     def _init_joystick(self):
-        # 1) pygame dene
-        pygame.joystick.init()
-        count = pygame.joystick.get_count()
-        if count > 0:
-            self.joy = pygame.joystick.Joystick(0)
-            self.joy.init()
-            self.joy_connected = True
-            self.joy_name = self.joy.get_name()
-            self.use_raw_joy = False
-            print(f"[JOY] pygame: {self.joy_name}")
-            return
-
-        # 2) /dev/input/js0 raw fallback
+        # 1) Linux: /dev/input/js0 direkt okuma (Steam/SDL'den bagimsiz)
         if os.path.exists("/dev/input/js0"):
             try:
                 self.joy = RawJoystick("/dev/input/js0")
@@ -168,7 +156,22 @@ class RcController:
                 return
             except PermissionError:
                 print("[JOY] /dev/input/js0 izin hatasi!")
-                print("[JOY] Cozum: sudo usermod -a -G input $USER && reboot")
+                print("[JOY] sudo usermod -a -G input $USER && reboot")
+
+        # 2) pygame fallback (diger isletim sistemleri / normal gamepad)
+        try:
+            pygame.joystick.init()
+            count = pygame.joystick.get_count()
+            if count > 0:
+                self.joy = pygame.joystick.Joystick(0)
+                self.joy.init()
+                self.joy_connected = True
+                self.joy_name = self.joy.get_name()
+                self.use_raw_joy = False
+                print(f"[JOY] pygame: {self.joy_name}")
+                return
+        except Exception as e:
+            print(f"[JOY] pygame hata: {e}")
 
         print("[JOY] Joystick bulunamadi - klavye modu")
 
