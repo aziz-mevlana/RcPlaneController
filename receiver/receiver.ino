@@ -193,7 +193,7 @@ void loop() {
 
   esc.writeMicroseconds(currentThrottle);
   servoRightAileron.writeMicroseconds(currentAileron);
-  servoLeftAileron.writeMicroseconds(3000 - currentAileron);
+  servoLeftAileron.writeMicroseconds(currentAileron);
   servoElevator.writeMicroseconds(currentElevator);
   servoRudder.writeMicroseconds(currentRudder);
 
@@ -206,13 +206,15 @@ void loop() {
 
     digitalWrite(PIN_LED, !digitalRead(PIN_LED));
 
-    if (millis() - lastResetAttempt > 5000 && resetAttempts < 3) {
-      Serial.print(F("!! NRF yeniden baslatiliyor ("));
-      Serial.print(resetAttempts + 1);
-      Serial.println(F("/3)"));
+    if (millis() - lastResetAttempt > 5000) {
+      if (resetAttempts < 3) {
+        Serial.print(F("!! NRF yeniden baslatiliyor ("));
+        Serial.print(resetAttempts + 1);
+        Serial.println(F("/3)"));
+      }
       resetRadio();
       lastResetAttempt = millis();
-      resetAttempts++;
+      if (resetAttempts < 3) resetAttempts++;
     }
 
     lastPacketTime = millis();
