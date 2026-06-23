@@ -190,13 +190,22 @@ class _BaseCtrl:
             print(f"[STAB] {'AKTIF' if self.aux > 1500 else 'PASIF'}")
         self._prev_stab_btn = btn_stab
 
-        # Sol Stick dikey eksen = GAZ
-        raw_left_stick_y = self.joy.get_raw_axis(ecodes.ABS_Y)
-        if raw_left_stick_y >= -DEADZONE:
+        r2_val = self.joy.get_raw_axis(ecodes.ABS_RZ)
+        l2_val = self.joy.get_raw_axis(ecodes.ABS_Z)
+        r2_pct = max(0.0, (r2_val + 1.0) / 2.0)
+        l2_pct = max(0.0, (l2_val + 1.0) / 2.0)
+
+        if l2_pct > 0.4:
             self.throttle = 1000
+        elif r2_pct > DEADZONE:
+            self.throttle = max(1000, min(2000, int(1000 + (r2_pct * 1000))))
         else:
-            pct = (abs(raw_left_stick_y) - DEADZONE) / (1.0 - DEADZONE)
-            self.throttle = max(1000, min(2000, int(1000 + (pct * 1000))))
+            raw_left_stick_y = self.joy.get_raw_axis(ecodes.ABS_Y)
+            if raw_left_stick_y >= -DEADZONE:
+                self.throttle = 1000
+            else:
+                pct = (abs(raw_left_stick_y) - DEADZONE) / (1.0 - DEADZONE)
+                self.throttle = max(1000, min(2000, int(1000 + (pct * 1000))))
 
         # Sol Stick yatay eksen = RUDDER
         lx_val = self._deadzone(self.joy.get_raw_axis(ecodes.ABS_X))
@@ -281,8 +290,19 @@ def _make_gui_controller():
             self.screen.blit(self.font_big.render("RC TELEMETRY CONTROL - READY", True, ACCENT), (16, 8))
             
             st = self.joy.get_name()[:32] if self.joy_connected else "KUMANDA BAGLANTISI YOK!"
-            s = self.font_sm.render(st, True, GREEN if self.joy_connected else RED)
-            self.screen.blit(s, (WIDTH - s.get_width() - 16, 13))
+            joy_color = GREEN if self.joy_connected else RED
+            s = self.font_sm.render(st, True, joy_color)
+            name_x = WIDTH - s.get_width() - 16
+
+            stab_active = self.aux > 1500
+            stab_badge = self.font_sm.render("STAB: AKTIF" if stab_active else "STAB: PASIF", True,
+                                             (0, 0, 0) if stab_active else TXT_COL)
+            bw = stab_badge.get_width() + 12
+            bx = name_x - bw - 10
+            pygame.draw.rect(self.screen, GREEN if stab_active else (80, 80, 90), (bx, 9, bw, 22), border_radius=4)
+            self.screen.blit(stab_badge, (bx + 6, 12))
+
+            self.screen.blit(s, (name_x, 13))
 
             js_rud = self.joy.get_raw_axis(ecodes.ABS_X)
             js_gaz = self.joy.get_raw_axis(ecodes.ABS_Y)
@@ -321,11 +341,7 @@ def _make_gui_controller():
                     pygame.draw.rect(self.screen, color, (cx, cy + 22, mw, 8), border_radius=2)
                 cx += 190
 
-            stab_label = f"STABILIZASYON: {'AKTIF' if self.aux > 1500 else 'PASIF'} (A tusu)"
-            stab_color = GREEN if self.aux > 1500 else (150, 150, 170)
-            self.screen.blit(self.font.render(stab_label, True, stab_color), (35, 448))
-
-            hints = "A=Stabilizasyon  |  Sol Analog: Gaz / Istikamet  |  Sag Analog: Kanatcik / Yukselis"
+            hints = "A=Stabilizasyon | R2=Tetik Gaz L2=Kes | Sol Analog: Istikamet | Sag Analog: Kanatcik/Yukselis"
             self.screen.blit(self.font_sm.render(hints, True, (120, 120, 140)), (40, 470))
 
             pygame.display.flip()
