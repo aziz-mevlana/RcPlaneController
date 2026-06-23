@@ -151,6 +151,7 @@ class _BaseCtrl:
         self.last_send = 0
         self.joy = None
         self.joy_connected = False
+        self._prev_stab_btn = False
 
     def _init_joystick(self):
         print("[JOY] LinuxJoy taniyor...")
@@ -182,6 +183,12 @@ class _BaseCtrl:
             self.throttle = 1000
         if self.joy.get_button(9): 
             self.running = False
+
+        btn_stab = self.joy.get_button(0)
+        if btn_stab and not self._prev_stab_btn:
+            self.aux = 2000 if self.aux < 1500 else 1000
+            print(f"[STAB] {'AKTIF' if self.aux > 1500 else 'PASIF'}")
+        self._prev_stab_btn = btn_stab
 
         # Sol Stick dikey eksen = GAZ
         raw_left_stick_y = self.joy.get_raw_axis(ecodes.ABS_Y)
@@ -230,7 +237,7 @@ class TtyController(_BaseCtrl):
         self._print_bar("A", self.aileron)
         self._print_bar("E", self.elevator)
         self._print_bar("D", self.rudder)
-        sys.stdout.write(f"| FREKANS={SEND_PERIOD}s")
+        sys.stdout.write(f"| STAB={'AKTIF' if self.aux > 1500 else 'PASIF'}| FREKANS={SEND_PERIOD}s")
         sys.stdout.write("\n")
         sys.stdout.flush()
 
@@ -314,7 +321,11 @@ def _make_gui_controller():
                     pygame.draw.rect(self.screen, color, (cx, cy + 22, mw, 8), border_radius=2)
                 cx += 190
 
-            hints = "Sol Analog: Gaz / İstikamet (Rudder)  |  Sağ Analog: Kanatçık (Aileron) / Yükseliş (Elevator)"
+            stab_label = f"STABILIZASYON: {'AKTIF' if self.aux > 1500 else 'PASIF'} (A tusu)"
+            stab_color = GREEN if self.aux > 1500 else (150, 150, 170)
+            self.screen.blit(self.font.render(stab_label, True, stab_color), (35, 448))
+
+            hints = "A=Stabilizasyon  |  Sol Analog: Gaz / Istikamet  |  Sag Analog: Kanatcik / Yukselis"
             self.screen.blit(self.font_sm.render(hints, True, (120, 120, 140)), (40, 470))
 
             pygame.display.flip()

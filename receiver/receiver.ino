@@ -1,6 +1,6 @@
 /*
  * RC Plane Controller - Alici (Receiver)
- * Arduino Nano + NRF24L01 + ESC + 4 Servo
+ * Arduino Nano + NRF24L01 + MPU6050 + ESC + 4 Servo
  *
  * NRF24L01 (tek basina) -> Arduino Nano:
  *   VCC  -> 3.3V  (VCC-GND arasi 10-100uF kondansator SART)
@@ -20,6 +20,12 @@
  *   MOSI -> D11
  *   MISO -> D12
  *
+ * MPU6050 -> Arduino Nano:
+ *   VCC -> 5V
+ *   GND -> GND
+ *   SCL -> A5
+ *   SDA -> A4
+ *
  * Cikislar (Dual Aileron):
  *   D3  -> ESC (Gaz/Throttle)
  *   D5  -> Sag Kanat Aileron  (aileron ile dogru orantili)
@@ -38,6 +44,8 @@
 #include <SPI.h>
 #include <RF24.h>
 #include <Servo.h>
+#include <Wire.h>
+#include <MPU6050_light.h>
 
 RF24 radio(9, 10);
 
@@ -82,6 +90,20 @@ uint16_t targetAileron = 1500;
 uint16_t targetElevator = 1500;
 uint16_t targetRudder = 1500;
 
+uint16_t stickAileron = 1500;
+uint16_t stickElevator = 1500;
+
+MPU6050 mpu(Wire);
+unsigned long lastMpuUpdate = 0;
+float roll = 0, pitch = 0, yaw = 0;
+bool stabEnabled = false;
+
+const float MAX_TARGET_ANGLE = 45.0;
+const float ROLL_KP  = 1.5;
+const float ROLL_KD  = 0.5;
+const float PITCH_KP = 1.5;
+const float PITCH_KD = 0.5;
+
 void resetRadio() {
   radio.stopListening();
   radio.begin();
@@ -95,6 +117,9 @@ void resetRadio() {
 }
 
 void centerServos() {
+  stabEnabled = false;
+  stickAileron = 1500;
+  stickElevator = 1500;
   targetThrottle = 1000;
   targetAileron = 1500;
   targetElevator = 1500;
@@ -126,6 +151,23 @@ void setup() {
   pinMode(PIN_LED, OUTPUT);
   digitalWrite(PIN_LED, LOW);
 
+  Wire.begin();
+  byte mpuStatus = mpu.begin();
+  if (mpuStatus != 0) {
+    Serial.print(F("MPU6050 bulunamadi! Kod: "));
+    Serial.println(mpuStatus);
+    while (1) {
+      digitalWrite(PIN_LED, !digitalRead(PIN_LED));
+      delay(200);
+    }
+  }
+  Serial.println(F("MPU6050 kalibre ediliyor... ucagi sabit tutun"));
+  digitalWrite(PIN_LED, HIGH);
+  delay(1000);
+  mpu.calcOffsets();
+  digitalWrite(PIN_LED, LOW);
+  Serial.println(F("MPU6050 hazir"));
+
   if (!radio.begin()) {
     Serial.println(F("NRF24L01 baslatilamadi!"));
     while (1);
@@ -156,6 +198,7 @@ void setup() {
   armed = true;
   Serial.println(F("=== RC Alici Hazir ==="));
   Serial.println(F("D3=ESC D5=SagAil D4=SolAil D6=Elev D7=Rudd"));
+  Serial.println(F("AUX>1500 = Stabilizasyon AKTIF"));
   Serial.println();
 }
 
@@ -172,9 +215,15 @@ void loop() {
     }
 
     targetThrottle = packet.throttle;
-    targetAileron  = packet.aileron;
-    targetElevator = packet.elevator;
+    stickAileron   = packet.aileron;
+    stickElevator  = packet.elevator;
     targetRudder   = packet.rudder;
+    stabEnabled    = (packet.aux > 1500);
+
+    if (!stabEnabled) {
+      targetAileron  = packet.aileron;
+      targetElevator = packet.elevator;
+    }
 
     Serial.print(F("<< T:"));
     Serial.print(packet.throttle);
@@ -183,7 +232,28 @@ void loop() {
     Serial.print(F(" E:"));
     Serial.print(packet.elevator);
     Serial.print(F(" D:"));
-    Serial.println(packet.rudder);
+    Serial.print(packet.rudder);
+    Serial.print(F(" STAB:"));
+    Serial.println(stabEnabled ? 'A' : 'P');
+  }
+
+  mpu.update();
+  if (millis() - lastMpuUpdate > 10) {
+    roll  = mpu.getAngleX();
+    pitch = mpu.getAngleY();
+    yaw   = mpu.getAngleZ();
+    lastMpuUpdate = millis();
+  }
+
+  if (stabEnabled && armed) {
+    float targetRoll  = ((float)(stickAileron - 1500) / 500.0) * MAX_TARGET_ANGLE;
+    float targetPitch = -((float)(stickElevator - 1500) / 500.0) * MAX_TARGET_ANGLE;
+
+    float rollCorr  = ROLL_KP  * (roll - targetRoll)  + ROLL_KD  * mpu.getGyroX();
+    float pitchCorr = PITCH_KP * (pitch - targetPitch) + PITCH_KD * mpu.getGyroY();
+
+    targetAileron  = constrain(1500 + (int)rollCorr,  1000, 2000);
+    targetElevator = constrain(1500 + (int)pitchCorr, 1000, 2000);
   }
 
   currentThrottle = smoothMove(currentThrottle, targetThrottle, 5);

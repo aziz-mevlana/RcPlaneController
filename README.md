@@ -1,12 +1,12 @@
 # RC Plane Controller
 
-2x Arduino Nano + NRF24L01 ile 5 kanal kablosuz RC uçak kontrol sistemi.
+2x Arduino Nano + NRF24L01 + MPU6050 ile 5 kanal kablosuz RC uçak kontrol ve stabilizasyon sistemi.
 
 ## Proje Yapısı
 
 ```
 ├── transmitter/transmitter.ino   # Verici - Binary protokol, NRF24L01 gönderir
-├── receiver/receiver.ino         # Alıcı - ESC + 4 servo (dual aileron)
+├── receiver/receiver.ino         # Alıcı - ESC + 4 servo (dual aileron) + MPU6050 stabilizasyon
 ├── control.py                    # PC klavye + joystick kontrol scripti
 ├── requirements.txt              # Python bağımlılıkları
 └── .gitignore
@@ -101,6 +101,19 @@ gittiğinde biri yukarı diğeri aşağı hareket eder.
 | GND    | ESC GND + Servo GND | Ortak toprak                 |
 | 5V/VIN | ESC BEC 5V          | USB yoksa bağla, USB varsa boş |
 
+### MPU6050 Bağlantısı (Stabilizasyon)
+
+| MPU6050 | Arduino Nano |
+|---------|-------------|
+| VCC     | **5V**       |
+| GND     | GND          |
+| SCL     | A5           |
+| SDA     | A4           |
+
+> MPU6050'yi titreşim izolasyonlu monte edin (sünger/çift taraflı bant).
+> X ekseni ileri, Y ekseni sağ kanada, Z ekseni aşağı bakmalı.
+> Arduino Library Manager'dan **MPU6050_light** kütüphanesini yükleyin.
+
 ---
 
 ## Verici (Transmitter) Bağlantıları
@@ -125,8 +138,9 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 2. Arduino IDE'de RF24 kütüphanesini yükle
+# 2. Arduino IDE'de kütüphaneleri yükle
 #    Araçlar > Kütüphane Yöneticisi > "RF24 by TMRh20"
+#    Araçlar > Kütüphane Yöneticisi > "MPU6050_light"
 
 # 3. transmitter/transmitter.ino → Verici Nano'ya yükle
 # 4. receiver/receiver.ino      → Alıcı Nano'ya yükle
@@ -168,10 +182,37 @@ canlı gösterilir. Klavye ve joystick aynı anda çalışır.
 | **D-Pad Sol/Sağ** | Aileron (yedek) |
 | **D-Pad Yukarı/Aşağı** | Elevator (yedek) |
 | **Start** | Çıkış |
+| **A / Cross** | Stabilizasyon aç/kapa |
+
+### Stabilizasyon (Auto-Level)
+
+MPU6050 ile uçağın roll ve pitch açıları okunur, PD kontrolcü ile otomatik
+dengeleme yapılır. Stick merkezdeyken uçak kendini düz tutar.
+
+- **Açma/Kapama:** Joystick'te **A (Cross)** tuşu
+- **AUX kanalı:** 2000 = aktif, 1000 = pasif
+- **Max hedef açı:** ±45° (tam stick)
+- **Failsafe:** Sinyal kesilince stabilizasyon otomatik kapanır
+
+#### PID Ayarı
+
+`receiver/receiver.ino` içinde ayarlanabilir:
+
+```cpp
+const float ROLL_KP  = 1.5;   // Roll oransal kazancı
+const float ROLL_KD  = 0.5;   // Roll türev kazancı (sönümleme)
+const float PITCH_KP = 1.5;   // Pitch oransal kazancı
+const float PITCH_KD = 0.5;   // Pitch türev kazancı
+```
+
+> İlk uçuşta düşük kazançlarla başlayın. Salınım varsa KD artırın,
+> yavaş tepki varsa KP artırın. Yön ters ise KP işaretini değiştirin.
 
 ### Güvenlik
 
 - Alıcı 1.5 saniyeden fazla sinyal alamazsa otomatik gaz keser (failsafe)
+- Stabilizasyon sinyal kesilince otomatik kapanır
 - Çıkışta (Q) gaz otomatik 1000'e çekilir
 - ESC arm olana kadar bekle (bip sesi)
 - **Pervaneyi takmadan önce sistemi test et**
+- MPU6050 kalibrasyonu her açılışta yapılır (3-4 sn), uçağı sabit tutun
